@@ -1,56 +1,52 @@
 {
-	"$schema": "https://opencode.ai/config.json",
-	"update": "auto",
-	"username": "eme",
-	"providers": {
-		"local-llama": {
-			"package": "aisdk:@ai-sdk/openai-compatible",
-			"settings": {
-				"baseURL": "https://llamat.emediaworkspace.com/v1"
-			},
-			"models": {
-				"Qwen3.8-27B-GGUF": {
-					"name": "Qwen3.8-27B-GGUF",
-					"capabilities": {
-						"tools": true,
-						"input": ["text", "image"],
-						"output": ["text"]
-					},
-					"limit": {
-						"context": 80000,
-						"output": 16384
-					}
-				}
-			}
-		}
-	},
-	"model": {
-		"providerID": "local-llama",
-		"model": "Qwen3.8-27B-GGUF"
-	},
-	"media": {
-		"image": {
-			"auto_resize": true,
-			"max_width": 2400,
-			"max_height": 2200,
-			"max_base64_bytes": 3097152
-		}
-	},
-	"tool_output": {
-		"max_lines": 1000,
-		"max_bytes": 32768
-	},
-	"compaction": {
-		"auto": true
-	},
-	"mcp": {
-		"eme-mediadb": {
-			"type": "remote",
-			"url": "http://localhost:8080/site/mediadb/ai/mcp/",
-			"headers": {
-				"Authorization": "Bearer adminmd5421c0af185908a6c0c40d50fd5e3f16760d5580bc"
-			},
-			"enabled": true
-		}
-	}
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "local-llama": {
+      "options": {
+        "baseURL": "https://llamat.emediaworkspace.com/v1",
+        "apiKey": "sk-dummy"
+      },
+      "models": {
+        "/root/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+          "name": "Qwen3.8-27B-GGUF",
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 65536,
+            "output": 16384
+          }
+        }
+      }
+    }
+  },
+  "model": "local-llama//root/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "mcp": {
+    "cua-driver": {
+      "type": "local",
+      "command": ["/home/shanti/.local/bin/cua-driver", "mcp"],
+      "enabled": false,
+      "timeout": 30000
+    }
+  },
+  "attachment": {
+    "image": {
+      "auto_resize": true,
+      "max_width": 1600,
+      "max_height": 1200,
+      "max_base64_bytes": 2097152
+    }
+  },
+  "tool_output": {
+    "max_lines": 1000,
+    "max_bytes": 32768
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 10
+  }
 }
