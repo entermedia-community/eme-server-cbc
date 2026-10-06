@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<page>
+  <property name="siteid">sources</property>
+  <property name="themeid">theme</property>
+  <property name="fallbackdirectory">/finder/find</property>
+  <property name="catalogid">sources/catalog</property>
+  <property name="applicationid">sources/find</property>
+</page>

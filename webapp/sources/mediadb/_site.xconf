@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<page>
+  <property name="siteid">sources</property>
+  <property name="fallbackdirectory">/mediadb</property>
+  <property name="catalogid">sources/catalog</property>
+  <property name="applicationid">sources/mediadb</property>
+</page>
