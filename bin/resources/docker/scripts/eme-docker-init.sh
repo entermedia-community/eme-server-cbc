@@ -79,6 +79,7 @@ sudo docker run -t -d \
 	-e CLIENT_NAME=$SERVERNAME \
 	-e INSTANCE_PORT=$NODENUMBER \
 	-v ${SERVERHOME}/:/home/entermedia/eme-server \
+	-v /mnt:/mnt \
 	$DOCKERPROJECT/$DOCKERIMAGE:$BRANCH \
 	/usr/bin/eme dockerstart /home/entermedia/eme-server
 
