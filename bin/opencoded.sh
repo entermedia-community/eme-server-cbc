@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 #
-# opencoded.sh — manage the OpenCode web interface on 127.0.0.1:49374
+# opencoded.sh — manage the OpenCode web interface
 #
 #   opencoded.sh [start]   configure + start the service, open the browser
 #   opencoded.sh restart   configure + restart the service
 #   opencoded.sh stop      stop the service
 #   opencoded.sh status    show service status
 #
-# Uses a fixed password (never rotates), so sign-in is always:
+# hostname, port and password come from the "server" block in opencode.json
+# (one folder up from this script). The password is fixed (never rotates),
+# so sign-in is always:
 #   username: opencode
-#   password: $OPENCODE_PASSWORD (default below)
+#   password: $OPENCODE_PASSWORD if set, else server.password from opencode.json
 #
 # Idempotent: if the background service is already listening at the target
 # address with the right config, it is left alone.
 #
 set -euo pipefail
+
+set -a
+SCRIPT_DIR=$(dirname "$0")
+source "$SCRIPT_DIR/../.env"
+set +a
+
 
 ACTION="${1:-start}"
 case "$ACTION" in
@@ -25,15 +33,36 @@ case "$ACTION" in
     ;;
 esac
 
-HOST="127.0.0.1"
-PORT="49374"
-PASSWORD="${OPENCODE_PASSWORD:-FPsl-1sc-reGPpldCdSKgOkgmsX31g-cFo_IldXRZAc}"
-URL="http://${HOST}:${PORT}"
 # opencode.json lives one folder up from this script (the repo root)
 CONFIG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/opencode.json"
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "error: config not found: $CONFIG" >&2
+  exit 1
+fi
+
+# Read the service binding from the "server" block in opencode.json.
+# The OPENCODE_PASSWORD env var still overrides the configured password.
+if command -v jq >/dev/null 2>&1; then
+  HOST="$(jq -r '.server.hostname // empty' "$CONFIG")"
+  PORT="$(jq -r '.server.port // empty' "$CONFIG")"
+  CONFIG_PW="$(jq -r '.server.password // empty' "$CONFIG")"
+elif command -v python3 >/dev/null 2>&1; then
+  read -r HOST PORT CONFIG_PW < <(python3 -c '
+import json,sys
+c=json.load(open(sys.argv[1]))
+s=c.get("server",{})
+print(s.get("hostname",""), s.get("port",""), s.get("password",""))' "$CONFIG")
+else
+  echo "error: need jq or python3 to read $CONFIG" >&2
+  exit 1
+fi
+
+PASSWORD="${OPENCODE_PASSWORD:-$CONFIG_PW}"
+URL="http://${HOST}:${PORT}"
+
+if [[ -z "$HOST" || -z "$PORT" || -z "$PASSWORD" ]]; then
+  echo "error: server.hostname / server.port / server.password missing in $CONFIG or .env" >&2
   exit 1
 fi
 
@@ -129,6 +158,7 @@ fi
 
 echo "OpenCode web interface: $URL"
 echo "sign-in: username=opencode password=$PASSWORD"
+echo ""
 
 [[ "$ACTION" == start ]] || exit 0
 

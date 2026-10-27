@@ -40,23 +40,26 @@ public interface Skill
 {
 	void processStarting(AgentContext inContext);
 	void process(AgentContext inContext);
-	void processCompleted(AgentContext inContext);
+	void processUpdate(AgentContext inContext);    // broadcast the last response, keep working
+	void processCompleted(AgentContext inContext); // broadcast the last response, then run its exec step
 }
 ```
 
 - `AgentContext` is `org.entermediadb.ai.AgentContext` (not `org.entermediadb.ai.llm.AgentContext`
   — that's a different, unrelated class).
 - The running step is an `org.entermediadb.ai.agentjobs.AgentJobStep`
-  (`inContext.getCurrentAutomationStep()`), and the job it belongs to is an
+  (`inContext.getCurrentAgentJobStep()`), and the job it belongs to is an
   `org.entermediadb.ai.agentjobs.AgentJob` (`inContext.getCurrentAgentJob()`, e.g.
   `getCurrentAgentJob().getScenarioId()`). The old `org.entermediadb.ai.llm.AutomationStep` and
   `RunningScenario` classes no longer exist.
 - Extend `BaseSkill` (`plugins/finder/code/org/entermediadb/ai/BaseSkill.java`) and override only
   `process(...)` unless you specifically need to change start/complete behavior. `BaseSkill`'s
   `processStarting` fires the "starting" status (skipped if the context holds
-  `cancelstartup<enabledId>` = true); `processCompleted` does nothing by default. Its default
-  `process` fires the "complete" status and then runs the step's children
-  (`getCurrentAutomationStep().getChildren()`) through `getAgentJobManager().createAgentContext(...)`
+  `cancelstartup<enabledId>` = true). `processUpdate` saves and broadcasts `inContext.getLastResponse()`
+  to the chat without ending the step. `processCompleted` does the same broadcast, then runs the
+  response's `getExecAutomationStep()` if one is set. Its default
+  `process` calls `processCompleted` and then runs the step's children
+  (`getCurrentAgentJobStep().getChildren()`) through `getAgentJobManager().createAgentContext(...)`
   and `getAgentJobManager().runProcess(...)` — call `super.process(inContext)` at the end of your
   override to keep that chaining, or omit it if this step must not auto-advance.
 - To jump to a specific next step instead, call
@@ -83,6 +86,59 @@ public class SkillName extends BaseSkill
 See `plugins/finder/code/org/entermediadb/ai/skills/OpenCodeJobCreatorSkill.java` for a real,
 non-trivial example (only overrides `process`, casts `AgentContext` to a more specific subtype like
 `ChatMessageContext` when it needs chat history).
+
+### Waiting before responding
+
+A skill that should pause (let a chat conversation settle, poll a running job) sleeps on its own
+thread inside `process` using the `BaseSkill` helpers. There is no `setWaitTime` on `AgentContext`
+anymore, and do not fire a complete status just to come back later, since that broadcasts an empty
+message.
+
+- `waitBeforeResponding(inContext, millis)` blocks the current thread. It returns `true` when the
+  full wait passed and `false` when it was cancelled. Each chat message runs on its own executor
+  thread, so this only blocks that one message.
+- `cancelPendingWait(inContext)` wakes a wait by the **same skill class on the same channel**. Call
+  it at the top of `process` when a newer message should replace the older one. Starting a new wait
+  also cancels the previous one for that skill and channel. Contexts without a channel can wait but
+  cannot be cancelled.
+- `noResponse(inContext)` ends the step without saving or broadcasting anything (it sets a
+  `cancel` response). Call it on every path that returns without a real answer, including a
+  cancelled wait. Otherwise `runStep` reads whatever response was left on the shared context.
+- `processUpdate(inContext)` broadcasts progress while the skill keeps going. Set the response with
+  `setLastResponse` first.
+- After a wait, re-check whatever the decision depends on (the latest chat message, the job
+  status), since the world may have changed while sleeping.
+- While a skill waits, its step and agent job stay `running`.
+
+Debounce a chat message (see `LibraryCollectionChatMonitorSkill`):
+
+```java
+public void process(AgentContext inContext)
+{
+	cancelPendingWait(inContext); //A newer message replaces whatever we were waiting on
+	// ... call the LLM, decide what to say ...
+	if (!waitBeforeResponding(inContext, minutes * 60L * 1000L))
+	{
+		noResponse(inContext); //a newer message is being handled instead
+		return;
+	}
+	// still the latest message? then render and processCompleted(inContext)
+}
+```
+
+Poll until something finishes (see `AgentJobStatusSkill`):
+
+```java
+for (int loops = 0; ; loops++)
+{
+	LlmResponse response = renderStatus(inContext, job);
+	inContext.setLastResponse(response);
+	if (finished) { break; }
+	processUpdate(inContext);
+	if (!waitBeforeResponding(inContext, 5000L)) { noResponse(inContext); return; }
+}
+super.process(inContext); // processCompleted + children
+```
 
 ## Step 3: Register the Skill bean
 
@@ -176,17 +232,98 @@ bin/restart.sh
   compile step. If no debug session is running, it runs `bin/start.sh` to start one. On other
   instances it restarts the docker container.
 - It returns as soon as the restart is sent, so poll `http://localhost:8080/site/` until it answers
-  before testing.
-- It exits 1 if VS Code is not reachable on port 3710 — report that to the user rather than working
-  around it, and never start Tomcat yourself with `eme.sh start`.
+  before testing. Note Tomcat listening on 8080 does **not** mean the app is ready — after a restart
+  the Java extension first compiles (several minutes for this codebase), and even once Tomcat is up,
+  `/site/` can keep returning 404 while the Spring context initializes. Poll `/site/` specifically;
+  a bare `/` answering HTML does not prove the app is up.
+- If it exits 1 ("VS Code is not reachable on port 3710"), don't work around it blindly: the
+  WebSocket port is hardcoded in the script, and a local edit to `bin/restart.sh` (or
+  `.vscode/settings.json`'s `remoteControl.port`) can make it point at the wrong port. Compare the
+  port in the script against what is actually listening (`ss -tlnp | grep code`) and send the same
+  node one-liner from the script against the correct port (ask the user first if you deviate from
+  the script). Leave the user's local edits to the script untouched.
+- If the VS Code window was closed or reloaded, the debug session is gone with it: `bin/restart.sh`
+  will fall through to `bin/start.sh` (`workbench.action.debug.start`). After a window reload the
+  Remote Control extension may take a few seconds to bind its port again — poll the port briefly
+  before concluding VS Code is unreachable.
 
 Then load the new `aiskill` and `automationstep` rows with the `reload-list-data` skill
 (`restoredata` for both tables; a restart does not do this).
+
+If `bin/restart.sh` exits 1, the server is still running the old code. Report that, and check the
+edited files for compile errors through VS Code diagnostics (`getDiagnostics` on each `.java` file)
+so the code is known to compile before the user restarts.
 
 ## Step 7: Validate
 
 1. Confirm `beanId` appears in the automation agent list in the admin UI.
 2. Trigger the target event/module and verify the skill executed in the logs.
+
+## Skills that process assets (informatics)
+
+Steps with `contextbean="informaticsContext"` receive a page of assets from the Informatics
+Processor. Follow the same contract as `ClassifyManager`, `EmbeddingManager` and `TranscriberManager`:
+
+- Wrap the context with `new InformaticsContext(inContext)` and read `getAssetsToProcess()`.
+- When one asset fails, set `asset.setValue("llmerror", true)` and move on to the next one. Do not save
+  the asset: `InformaticsProcessorSkill` saves the whole page at the end and marks the rest
+  `taggedbyllm`.
+- After the work, remove `llmerror` assets from the list and call `setAssetsToProcess(...)` so child
+  steps skip them, then `super.process(...)`.
+- Assets with `llmerror=true` are left out of later informatics queries until the flag is cleared, so
+  a failure is not retried automatically.
+- If the skill tracks its own progress in another table (as `videotrack.transcribestatus` does), make
+  sure an `inprogress` state cannot get stuck forever after a restart. Treat it as stale after a time
+  limit.
+
+## Calling a non-LLM AI server (`aiserver` rows)
+
+Remote services such as transcribe, translate, embedding or face detection are rows in
+`plugins/catalog/html/data/lists/aiserver/*.xml`, usually with `connectionbean="httpConnection"`.
+`plugins/finder/.agents/skills/transcriber/SKILL.md` walks through a complete example.
+
+- Look the server up by type: `getMediaArchive().getLlmConnection("<aiservertype>")`. It picks the
+  row with that `aiservertype` and the lowest `ordering`, so never hard-code a row id or URL. If no row
+  matches, it falls back to the `localhost` row, which has no `serverroot`.
+- `serverroot` (+ `serverpathprefix`) is the base URL, `serverapikey` is the bearer token
+  (`connection.getApiKey()`).
+- File upload: `connection.callJson("/path", headers, params)` with a `Map` of params sends a
+  multipart POST. A `java.io.File` value becomes a file part (`application/octet-stream`), a `String`
+  a text field. Headers passed here stay on the shared connection.
+- A JSON body: `callJson("/path", JSONObject)`.
+- Status other than 200 throws `OpenEditException("Could not call /path")` and logs the body.
+  Read the result with `getRawResponse()` (object) or `getRawCollection()` (array).
+- Responses are parsed with json-simple, which returns `Long` for whole numbers and `Double` for
+  decimals. Read numbers as `((Number) json.get("x")).doubleValue()`, never `(double)` or `(Long)`.
+- Connections are cached per server type in cache `llmconnection`. After changing an `aiserver` row,
+  reset the table with `reload-list-data` and then clear caches, or the old URL and key stay in use.
+
+## Splitting or renaming an existing skill
+
+When one skill class is replaced by several (e.g. splitting a dispatcher-style `process()` into one
+class per branch), do all of this or the split breaks at runtime:
+
+1. **Find every reference first.** Grep the whole repo (Java, XML, templates, groovy) for both the
+   class name and the old bean id. Callers usually hold the skill through a getter like
+   `getSearchingSkill()` on a module/manager class — those getters are compile blockers if you
+   delete the class before repointing or removing them. Dead getters that nothing calls can simply
+   be deleted; live call sites must be repointed to the specific new bean.
+2. **Keep the id convention.** Each new class gets `beanId` = lowerCamel of its class name, used for
+   the Spring bean id, the `aiskill` data id, and the `aiskill=` reference in every `automationstep`
+   row that should run it. Do not copy legacy anomalies where the aiskill data id differs from the
+   bean (e.g. the old `searchingChatSkill` row pointed at bean `searchingSkill`).
+3. **Replace the aiskill rows, don't just add.** `restoredata` matches by id, so the stale row with
+   the old id survives the reload and its step fails when it runs (the orchestrator can't resolve the
+   bean). Delete each old row through the mediadb API first, then restoredata — see the
+   `reload-list-data` skill, section 3.
+4. **Point each automationstep at the right new aiskill.** A dispatcher split means different step
+   ids now map to different skills; update every row in every scenario file that referenced the old
+   one (including steps whose branch the class still throws "not supported" for — keep them pointed
+   at whichever new skill preserves the old behavior exactly, and tell the user).
+5. **Verify fidelity against the working tree, not just git HEAD.** If the original file had
+   uncommitted local edits, diffing the split classes against `git show HEAD:...` produces spurious
+   "missing" lines for every local change. Diff against the actual pre-split working-tree copy
+   instead, and account for intentional per-class differences (e.g. locals only one branch used).
 
 ## Calling an LLM: `html/ai/<provider>/calls/*.json` templates
 
@@ -261,6 +398,8 @@ array-of-objects-with-nested-array shape.
 
 ## Related
 
+- `plugins/finder/.agents/skills/transcriber/SKILL.md`: worked example of an informatics skill that
+  calls a non-LLM `aiserver` (transcribe) with multipart uploads.
 - Data tables that back the AI pipeline (aiskill, automationstep, aiserver, aistyle, ...) live under
   `plugins/catalog/html/data/fields` and `plugins/catalog/html/data/lists` — use the
   `catalog-table-creator` skill (in the `catalog` plugin) if you also need a new backing table or field.

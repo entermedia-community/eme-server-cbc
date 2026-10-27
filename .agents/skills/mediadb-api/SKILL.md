@@ -9,12 +9,21 @@ The JSON REST API lives in `plugins/mediadb/html/services/`. Every table ("searc
 embedded Elasticsearch database is reachable through the same few generic endpoints.
 
 - Base URL: `http://localhost:8080/site/mediadb`
-- Every call needs the local admin header (see the root `AGENTS.md`):
+- Every call needs a Bearer token. `bin/refreshtoken.sh` (run from the repo root) prints it; take the last line so any
+  messages the script writes before it are ignored. See the root `AGENTS.md`:
 
 ```bash
-A='Authorization: Bearer adminmd5421c0af185908a6c0c40d50fd5e3f16760d5580bc'
+A="Authorization: Bearer $(bin/refreshtoken.sh | tail -n1)"
 B=http://localhost:8080/site/mediadb
 J='Content-Type: application/json'
+```
+
+Credentials are public keys and application passwords, not the old password-derived `md542` key or the `emekey`
+cookie (both removed). Setup, the `services/authentication/*` endpoints and troubleshooting are in the
+`mediadb-auth` skill. Quick check that the token works:
+
+```bash
+curl -s -H "$A" $B/services/authentication/listkeys.json
 ```
 
 The path is `/site/mediadb/services/...` once. A doubled `/site/mediadb/site/mediadb/services/...`
@@ -147,9 +156,12 @@ What was verified on the local server (color table, stored value `Cadetblue`):
 | `name contains adetbl` / `ADETBL` | 1 / 1 | Case-insensitive (server lowercases the value) |
 | `name exact Cadetblue` / `cadetblue` | 1 / 0 | `exact` is case-sensitive — match the stored value |
 | `id exact 52` | 1 | Use `exact` for ids and list-valued fields |
+| `id matches searching*` (aiskill) | 0 | Wildcards on `id` are unreliable — a trailing wildcard returned 0 hits although the row existed; `id exact searchingChatSkill` found it |
 
 Rule of thumb: use `contains` or `matches` for text and lowercase any value that has a `*` anywhere
-other than the end; use `exact` only when you know the exact stored value.
+other than the end; use `exact` only when you know the exact stored value. For the `id` field always
+use `exact` — wildcard `matches` on `id` can return 0 hits even when the row exists, which looks like
+"the row is missing" when it isn't.
 
 ## 4. Load, save, delete one row
 

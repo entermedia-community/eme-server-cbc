@@ -1,4 +1,5 @@
 .DS_Store
+.env
 build/
 tomcat/logs
 webapp/WEB-INF/data/
@@ -7,6 +8,7 @@ webapp/WEB-INF/elastic/
 webapp/WEB-INF/tmp/
 webapp/WEB-INF/temp/
 webapp/WEB-INF/trash/
+webapp/WEB-INF/encrypt.properties
 
 plugins/catalog/
 plugins/finder/
@@ -18,6 +20,6 @@ plugins/mediadb/
 plugins/openedit/
 plugins/app-genailabs/
 .env
-
+.refreshtoken
 
 webapp/site/
